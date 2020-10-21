@@ -1,0 +1,87 @@
+---
+title: "Social Vulnerability Weighting Algorithm (SVWA)"
+output:
+  html_document:
+    editor_options: null
+    smart: no
+  pdf_document: default
+  chunk_output_type: inline
+  
+#Copyright (c) 2020 by Joseph Charles Toland
+---
+Load Libraries:
+```{r message=F, warning=F}
+library(dplyr)
+library(ggplot2)
+library(maps)
+library(mapdata)
+library(tinytex)
+library("maptools")
+library("DescTools")
+library(GISTools)
+library(rgdal)
+
+memory.limit(size=50000)
+```
+1. Initialize the shpfile for the tests and calculate fields: 
+```{r}
+calc <- readOGR(dsn="C:/Users/jtoland/Desktop/Haywired/R", layer="SVWA")
+```
+2. Run Social Vulerbaility Weigtig Algorithm 
+```{r}
+sigma <- 0.0944685
+
+calc <-as.data.frame(calc)
+
+#Normalize the sovi scores
+
+calc <- calc %>% mutate(normalized = (calc$SOVI0610CA - min(calc$SOVI0610CA))/(max(calc$SOVI0610CA)- min(calc$SOVI0610CA)))
+
+#calculate the quantiles as percentile ranks from the empirical distirbution
+
+percentilerank<-function(x){
+  lesser <- (cumsum(c(0, rle(sort(x))$lengths))[seq(length(rle(sort(x))$lengths))])
+  greater <- (rev(cumsum(c(0, rev(rle(sort(x))$lengths))))[-1])
+  rxpr <- lesser/(lesser + greater)
+  
+  rxpr[match(x, rle(sort(x))$values)]
+}
+
+calc$quantiles<-percentilerank(calc$normalized)
+calc$quantiles[calc$quantiles==0]<- .000001
+calc$quantiles[calc$quantiles==1]<- .999999
+
+# calculate the scale by s parameter
+
+calc <- calc %>% mutate(M = abs(calc$PHYS_VULN - 1))
+calc <- calc %>% mutate(m = abs(calc$PHYS_VULN))
+calc_h <- calc[, c("M", "m")]
+calc$num <- as.vector(apply(X=calc_h, MARGIN=1, FUN=min))
+calc$denom <- as.vector(apply(X=calc_h, MARGIN=1, FUN=max))
+scale_s <- calc$num/calc$denom
+
+#Generate the weighting distributions and calculate community vulnerbility
+
+calc <- calc %>% mutate(COMM_VULN_TEST = qnorm(calc$quantiles, mean = calc$PHYS_VULN, sd = sigma*scale_s)) 
+
+#floor, as there no percentages of people, food or water resources, so there is an integer threshold
+
+calc <- calc %>% mutate(POP_VULN_TEST = floor(calc$COMM_VULN_TEST*calc$POP)) 
+calc <- calc %>% mutate(POP_WATER_TEST = floor(calc$COMM_VULN_TEST*calc$POP *3))  
+calc <- calc %>% mutate(POP_MEALS_TEST = floor(calc$COMM_VULN_TEST*calc$POP*2))
+
+#display the results
+
+sum(calc$POP_VULN_TEST)
+sum(calc$POP_WATER_TEST)
+sum(calc$POP_MEALS_TEST)
+
+```
+
+```{r}
+# Export the test results for comparison
+
+export(calc[,c("KEY","LAT","LON", "SOVI0610CA", "PHYS_VULN", "COMM_VULN_TEST", "POP_VULN_TEST", "POP_WATER_TEST", "POP_MEALS_TEST", "POP")], "TEST.dbf", format = "dbf")
+```
+
+
